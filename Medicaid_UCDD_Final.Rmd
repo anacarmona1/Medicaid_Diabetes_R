@@ -1,0 +1,317 @@
+#Prolog 
+#Project: "Final project"
+#Purpose: "To establish the relationship between Medicaid expansion and diabetes deaths across the United States"
+#Authors: Ana Carmona, Brendan, Kevine
+#Edit Date: 04/26/2025
+#External Data Files Used:food_insecurity.csv, ucd_medicaid_2023, and gdp.csv
+```{r}
+#loading packages 
+library(dplyr)
+library(tidyverse)
+library(readr)
+#loading data 
+food_insecurity <-read_csv("food_insecurity.csv")
+ucd_medicaid <- read_csv("ucd_medicaid_2023.csv") 
+gdp <- read.csv("GDP.csv", skip = 4, stringsAsFactors = FALSE) #since data is pivoted we're skipping the metadata that it has in the first 4 rows
+```
+
+```{r}
+#cleaning gdp dataset, since this dataset has a lot of spaces and symbols, we decided to start by changing the names of the variables in it 
+# Renaming columns
+colnames(gdp) <- c("GeoFips", "State", "LineCode", "Description", "Value")
+gdp_state <- gdp[grepl("Gross domestic product \\(GDP\\)", gdp$Description), ]
+gdp_state_cleaned <- gdp_state[, c("State", "Value")]
+colnames(gdp_state_cleaned) <- c("State", "GDP")
+gdp_state_cleaned <- subset(gdp_state_cleaned, State != "United States")
+
+```
+```{r}
+#Cleaning ucd_medicaid dataset 
+ucd_medicaid <- ucd_medicaid %>% select (-`Single Race 6 Code`, -Notes, -`Year Code`, -`Sex Code`, -`Ten-Year Age Groups Code`)
+#Cleaning food insecurity dataset 
+food_insecurity <- food_insecurity%>%
+  rename(Food_Insc_household = FoodInsecurityAvgHouseholds201921,
+    Food_Insc_Low_vl = FoodInsecurityLowOrVLPercent)
+food_insecurity <- food_insecurity %>% select (-FoodInsecurityVeryLowPercent)
+```
+```{r}
+#merging food insecurity and gdp into one dataset as they only have 1 ocurrance per state 
+merged_data_ucd <- food_insecurity%>%
+  left_join(gdp_state_cleaned, by = "State")
+```
+
+```{r}
+#creating a new dataset with variables that only have one ocurrance per state 
+medicaid_unemployment <-read_csv("ucd_medicaid_unemployment.csv")
+merged_data_ucd <- merged_data_ucd%>%
+  left_join(medicaid_unemployment, by = "State")
+
+```
+```{r}
+#Converting to num 
+ucd_medicaid <- ucd_medicaid %>%
+  mutate(
+    Deaths = as.numeric(Deaths),
+    Population = as.numeric(Population),
+    `Crude Rate` = as.numeric(`Crude Rate`),
+    `% of Total Deaths` = as.numeric(`% of Total Deaths`)
+  )
+#converting GDP to numeric
+merged_data_ucd$GDP <- as.numeric(as.character(merged_data_ucd$GDP))
+
+
+#data aggregation 
+state_summary <- ucd_medicaid %>%
+  group_by(State)%>%
+  summarise(
+    Total_Deaths = sum(Deaths, na.rm = TRUE), 
+    Total_Population = sum(Population, na.rm = TRUE), 
+    Total_Crude_Rate = sum(`Crude Rate`, na.rm = TRUE), 
+    Total_Percent_Deaths = sum(`% of Total Deaths`, na.rm = TRUE) 
+    )%>% 
+      mutate( Death_Rate_Per_100k = (Total_Deaths / Total_Population)* 100000
+  )
+```
+
+#Creating two final datasets, one of the datasets will include variables like race, age, sex that contain multiple instances for the same state, the other dataset will only include variables with an unique value per state such as GDP and Medicaid Expansion. 
+
+```{r}
+#joining merged medicaid data with mortality data 
+merged_data_ucd <- state_summary%>%
+  left_join(merged_data_ucd, by = "State")
+merged_data_ucd <- merged_data_ucd %>% select(-Total_Percent_Deaths)
+merged_data_ucd <- merged_data_ucd %>% drop_na()
+
+```
+```{r}
+ucd_medicaid <- ucd_medicaid%>%
+  select (-`State Code`, -`% of Total Deaths`, -`Crude Rate`)
+ucd_medicaid <- ucd_medicaid%>% drop_na()
+
+``` 
+#Exploratory data analysis and descriptives
+```{r}
+hist(merged_data_ucd$Death_Rate_Per_100k)
+qqnorm(merged_data_ucd$Death_Rate_Per_100k); qqline(merged_data_ucd$Death_Rate_Per_100k)
+table(ucd_medicaid$`Single Race 6`)
+barplot(table(ucd_medicaid$`Single Race 6`))
+``` 
+```{r}
+#table1 for mortality and medicaid variables. 
+library(tableone)
+
+continuous_vars <- c("Total_Deaths", "Total_Population", "Total_Crude_Rate", 
+                     "Death_Rate_Per_100k", "Food_Insc_household", 
+                     "Food_Insc_Low_vl", "GDP", "Unemployment")
+categorical_vars <- c("Medicaid_Expansion")  
+
+table_one <- CreateTableOne(
+  vars = c(continuous_vars, categorical_vars),
+  data = merged_data_ucd,
+  factorVars = categorical_vars
+)
+print(table_one, nonnormal = c("GDP"), showAllLevels = TRUE, varLabels = TRUE) #since gdp is not normally distribuited we decided to use IQR. 
+
+``` 
+```{r}
+#table1 for race, sex and age. 
+library(tableone)
+
+categorical_vars <- c("Sex", "Single Race 6")
+continuous_vars <- c("Ten-Year Age Groups")  
+
+table_one <- CreateTableOne(
+  vars = c(continuous_vars, categorical_vars),
+  data = ucd_medicaid,
+  factorVars = categorical_vars
+)
+print(table_one, showAllLevels = TRUE, varLabels = TRUE)
+``` 
+```{r}
+#using shapiro test to determine if our variables are normally distributed or if they will need some transformation before performing tests
+shapiro.test(merged_data_ucd$GDP)
+shapiro.test(merged_data_ucd$Total_Deaths)
+shapiro.test(merged_data_ucd$Death_Rate_Per_100k)
+shapiro.test(merged_data_ucd$Food_Insc_household)
+shapiro.test(merged_data_ucd$Food_Insc_Low_vl)
+shapiro.test(merged_data_ucd$Unemployment)
+```
+
+```{r}
+merged_data_ucd <- merged_data_ucd %>%
+  mutate(
+    log_GDP = log(GDP),               
+    log1p_Total_Deaths = log1p(Total_Deaths),   
+    log_Death_Rate_Per_100k = log(Death_Rate_Per_100k),  
+    log1p_Food_Insc_household = log1p(Food_Insc_household) 
+  )
+```
+```{r}
+#rechecking distribution 
+shapiro.test(merged_data_ucd$log_GDP)
+shapiro.test(merged_data_ucd$log1p_Total_Deaths)
+shapiro.test(merged_data_ucd$log_Death_Rate_Per_100k)
+shapiro.test(merged_data_ucd$log1p_Food_Insc_household)
+
+
+```
+```{r}
+
+#Opening the file
+data_singular <- read.csv("merged_data_ucd.csv")
+
+
+#We're also going to do a bar plot, to see prior to testing, if there a noticeable difference between Unemployment and medicaid_Expansion. This way we can see any noticeable differences prior to seeing if it's significant. 
+
+data_singular %>%
+  ggplot(mapping = aes(x = Medicaid_Expansion, y = Unemployment)) +
+  geom_col(fill = "black") +
+  labs(x = "Medicaid Expansion",
+       y = "Unemployment %") +
+  ggtitle("           Unemployment % per state-wide Medicaid Expansion") +
+  theme_light()
+
+
+#We're also going to make a stacked bar plot for our anova test. This is to see if any potentially noticeable differences between deaths rates and medicaid Expansion prior to doing any statistical tests.
+
+data_singular %>%
+  ggplot(mapping = aes(x = Medicaid_Expansion, y = Death_Rate_Per_100k)) +
+  geom_col(fill = "black") +
+  labs(x = "Medicaid Expansion",
+       y = "Total Death by Diabetes") +
+  ggtitle("           Total Deaths Rate per 100K by Diabetes per state-wide Medicaid Expansion") +
+  theme_light()
+
+
+#Running our t-test, looking at medicaid Expansion to total_death by diabetes.
+
+#Checking assumptions: equal variance 
+car::leveneTest(y = Unemployment ~ Medicaid_Expansion,
+                center = "median",
+                data = data_singular)
+
+#Checking a histogram to look at equal normality. 
+
+t_test_histogram_normality <- data_singular %>%
+  ggplot(aes(x = Unemployment)) +
+  geom_histogram(bins = 20) +
+   labs(x = "Unemployment %",
+       y = "Total number of States")+
+  facet_wrap(~ Medicaid_Expansion)
+t_test_histogram_normality
+
+t_test_normality <- data_singular %>%
+  group_by(Medicaid_Expansion) %>%
+  summarise(shapiro.wilk_pvalue = shapiro.test(Unemployment)$p.value)
+t_test_normality
+
+
+#Since we don't meet both assumptions of equal variance or normality, we're going to a welch's t-test. 
+
+result_whit <- t.test(data_singular$Unemployment ~ data_singular$Medicaid_Expansion)
+result_whit
+
+
+# To determine any variation, and potentially any post-hoc test we can preform, we're also going to hopefully do a one-way anova test, to specifically look at Medicaid Expansion (Categorical) against GDP (continous). If our assumptions fail, we will do a Kruskal-wallis test.
+
+
+#Checking Assumptions (normality)
+
+anova_histogram_normality <- data_singular %>%
+  ggplot(aes(x = log(Death_Rate_Per_100k))) +
+  geom_histogram(bins = 20) +
+  labs(x = "Death Rate per 100k",
+       y = "Total number of States")+
+  facet_wrap(~ Medicaid_Expansion)
+anova_histogram_normality
+
+anova_normality <- data_singular %>%
+  group_by(Medicaid_Expansion) %>%
+  summarise(shapiro.wilk_pvalue = shapiro.test(log(Death_Rate_Per_100k))$p.value)
+anova_normality
+
+#Checking Assumption (Variance)
+
+car::leveneTest(y = log(Death_Rate_Per_100k) ~ Medicaid_Expansion,
+                center = "median",
+                data = data_singular)
+
+#Since our normality assumption is met, we're going to do a one-way ANOVA test.
+
+oneway_anova_test <- oneway.test(formula = log(Death_Rate_Per_100k) ~ Medicaid_Expansion,
+            data = data_singular,
+            var.equal = TRUE)
+oneway_anova_test
+
+
+#Between Death rates per 100k and medicaid_expansion, there isn't any significance, therefore no post-hoc test needed.
+
+
+```
+
+
+# Multiple Linear Regression
+```{r}
+# Running the multiple linear regression
+multi_model <- lm(Death_Rate_Per_100k ~ Medicaid_Expansion + Unemployment + Food_Insc_Low_vl + GDP, data = merged_data_ucd)
+summary(multi_model)
+
+```
+# We used Deaths_Rate_Per_100k as our outcome since it is a continous variable and Medicaid_Expansion as our predicator for this analysis since it is a categorical variable to control for Unemployment, Food Insecurity and GDP. So after controlling for Unemployment, Food Insecurity and GDP, and looking at Medicaid_ExpansionYes, we see that the p-value < 0.05 (0.002853) implying that Medicaid expansion reduced diabetes death rates compared to non-expansion states.
+
+  
+
+
+#Assumption Checking
+#Linearity and Homoscedasticity
+```{r}
+# Residual plots
+plot(multi_model, which = 1) # Residuals vs Fitted
+plot(multi_model, which = 2) # Normal Q-Q plot
+
+```
+# Residuals vs Fitted should show a random scatter (no funnel shape or curve) and the Q-Q plot shows points along the diagonal.therefore linearity and homoscedasticity assumptions are met.
+
+
+#Normality of residuals
+```{r}
+# Shapiro-Wilk test for normality
+shapiro.test(residuals(multi_model))
+
+```
+#The Shapiro-Wilk test for normality of residuals indicated a violation of the normality assumption (W = 0.917, p = 0.0017). Given the relatively moderate sample size and the robustness of linear regression to minor normality violations, the results were interpreted with caution.
+
+#Independence of residuals
+```{r}
+# Durbin-Watson Test
+library(lmtest)
+dwtest(multi_model)
+
+```
+# The Durbin-Watson test indicated no evidence of autocorrelation among the residuals (DW = 2.10, p = 0.63), satisfying the assumption of independence.
+
+#Multicollinearity
+```{r}
+# Checking Variance Inflation Factor (VIF)
+library(car)
+vif(multi_model)
+
+```
+#All VIF values were below 2, indicating no concerning multicollinearity among independent variables.
+
+#Coefficient plot
+```{r}
+# Coefficient plot
+library(broom)
+tidy(multi_model) %>%
+  ggplot(aes(x = estimate, y = term)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = estimate - std.error, xmax = estimate + std.error)) +
+  theme_minimal() +
+  labs(title = "Coefficient Plot: Medicaid Expansion and Diabetes Death Rates", x = "Estimate", y = "Variables")
+
+```
+# this visuals, visualizes the regression estimates and confidence intervals.Since the confidence interval does not cross 0 and the point is to the left (negative), Medicaid Expansion reduced death rates significantly.
+
+
+
