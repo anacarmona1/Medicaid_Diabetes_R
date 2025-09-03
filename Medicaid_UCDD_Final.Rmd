@@ -1,7 +1,7 @@
 #Prolog 
 #Project: "Final project"
 #Purpose: "To establish the relationship between Medicaid expansion and diabetes deaths across the United States"
-#Authors: Ana Carmona, Brendan, Kevine
+#Authors: Ana Carmona, Brendan, lafouet Kevine
 #Edit Date: 04/26/2025
 #External Data Files Used:food_insecurity.csv, ucd_medicaid_2023, and gdp.csv
 ```{r}
@@ -312,6 +312,7 @@ tidy(multi_model) %>%
 
 ```
 # this visuals, visualizes the regression estimates and confidence intervals.Since the confidence interval does not cross 0 and the point is to the left (negative), Medicaid Expansion reduced death rates significantly.
+
 
 
 
